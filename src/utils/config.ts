@@ -1,5 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as os from 'os';
 import dotenv from 'dotenv';
 import chalk from 'chalk';
 import {
@@ -10,6 +11,7 @@ import {
   ConfigWithSource,
   ConfigWithSources,
   CodemieAssistant,
+  CodemieSkill,
   isMultiProviderConfig,
   isLegacyConfig
 } from '../env/types.js';
@@ -154,7 +156,7 @@ export class ConfigLoader {
   /**
    * Load global config and extract active profile if multi-provider
    */
-  private static async loadGlobalConfigProfile(profileName?: string): Promise<Partial<CodeMieConfigOptions>> {
+  static async loadGlobalConfigProfile(profileName?: string): Promise<Partial<CodeMieConfigOptions>> {
     const rawConfig = await this.loadJsonConfig(this.GLOBAL_CONFIG);
 
     // Check if multi-provider config
@@ -193,7 +195,7 @@ export class ConfigLoader {
    * Load local (project) config and extract active profile if multi-provider
    * Returns ONLY the fields defined in local config (for overlay on top of global)
    */
-  private static async loadLocalConfigProfile(
+  static async loadLocalConfigProfile(
     workingDir: string,
     profileName?: string
   ): Promise<Partial<CodeMieConfigOptions>> {
@@ -709,6 +711,94 @@ export class ConfigLoader {
     // Keep activeProfile pointing at a valid profile.
     // Update it to profileName when: no active profile is set, the current active
     // profile no longer exists, or this is the only profile in the file.
+    if (!config.activeProfile || !config.profiles[config.activeProfile] || Object.keys(config.profiles).length === 1) {
+      config.activeProfile = profileName;
+    }
+
+    await fs.writeFile(localConfigPath, JSON.stringify(config, null, 2), 'utf-8');
+  }
+
+  static async loadSkillsByScope(
+    scope: 'global' | 'local',
+    workingDir: string,
+    profileName: string
+  ): Promise<CodemieSkill[]> {
+    const skills = scope === 'global'
+      ? (await this.loadGlobalConfigProfile(profileName)).codemieSkills || []
+      : (await this.loadLocalConfigProfile(workingDir, profileName)).codemieSkills || [];
+
+    const skillsDir = scope === 'global'
+      ? path.join(os.homedir(), '.claude', 'skills')
+      : path.join(workingDir, '.claude', 'skills');
+
+    const verified = await Promise.all(skills.map(async (skill) => {
+      try {
+        await fs.access(path.join(skillsDir, skill.slug, 'SKILL.md'));
+        return skill;
+      } catch {
+        return null;
+      }
+    }));
+
+    return verified.filter((s): s is CodemieSkill => s !== null);
+  }
+
+  static async loadAssistantsByScope(
+    scope: 'global' | 'local',
+    workingDir: string,
+    profileName: string
+  ): Promise<CodemieAssistant[]> {
+    const assistants = scope === 'global'
+      ? (await this.loadGlobalConfigProfile(profileName)).codemieAssistants || []
+      : (await this.loadLocalConfigProfile(workingDir, profileName)).codemieAssistants || [];
+
+    const baseDir = scope === 'global' ? os.homedir() : workingDir;
+
+    const verified = await Promise.all(assistants.map(async (assistant) => {
+      try {
+        const isSkill = assistant.registrationMode === 'skill';
+        const filePath = isSkill
+          ? path.join(baseDir, '.claude', 'skills', assistant.slug, 'SKILL.md')
+          : path.join(baseDir, '.claude', 'agents', `${assistant.slug}.md`);
+        await fs.access(filePath);
+        return assistant;
+      } catch {
+        return null;
+      }
+    }));
+
+    return verified.filter((a): a is CodemieAssistant => a !== null);
+  }
+
+  static async saveSkillsToProjectConfig(
+    workingDir: string,
+    profileName: string,
+    skills: CodemieSkill[]
+  ): Promise<void> {
+    const localConfigPath = path.join(workingDir, this.LOCAL_CONFIG);
+    const configDir = path.dirname(localConfigPath);
+    await fs.mkdir(configDir, { recursive: true });
+
+    const rawConfig = await this.loadJsonConfig(localConfigPath);
+
+    let config: MultiProviderConfig;
+
+    if (isMultiProviderConfig(rawConfig)) {
+      config = rawConfig;
+    } else {
+      config = {
+        version: 2,
+        activeProfile: profileName,
+        profiles: {}
+      };
+    }
+
+    if (config.profiles[profileName]) {
+      config.profiles[profileName].codemieSkills = skills;
+    } else {
+      config.profiles[profileName] = { codemieSkills: skills };
+    }
+
     if (!config.activeProfile || !config.profiles[config.activeProfile] || Object.keys(config.profiles).length === 1) {
       config.activeProfile = profileName;
     }

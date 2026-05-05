@@ -11,6 +11,7 @@ import type { ProxyConfig } from '../../providers/plugins/sso/index.js';
 import { ProviderRegistry } from '../../providers/index.js';
 import type { CodeMieConfigOptions } from '../../env/types.js';
 import { getRandomWelcomeMessage, getRandomGoodbyeMessage } from '../../utils/goodbye-messages.js';
+import { syncRegisteredSkills } from '../../cli/commands/skills/setup/sync.js';
 import { renderProfileInfo } from '../../utils/profile.js';
 import chalk from 'chalk';
 import { existsSync } from 'fs';
@@ -518,6 +519,9 @@ export abstract class BaseAgentAdapter implements AgentAdapter {
       // Show random welcome message
       console.log(chalk.cyan.bold(getRandomWelcomeMessage()));
       console.log(''); // Empty line for spacing
+
+      // Silently sync registered skills in background (fire-and-forget)
+      syncRegisteredSkills(profileName, process.cwd()).catch(() => {});
     }
 
     // Transform CODEMIE_* → agent-specific env vars (based on envMapping)
