@@ -1,5 +1,5 @@
 /**
- * Claude Thinking Transformer Plugin Tests
+ * Claude Request Normalizer Plugin Tests
  *
  * Tests proxy-level transformation of thinking params for claude-opus-4-7:
  *   - thinking.type "enabled"  → thinking.type "adaptive" + output_config.effort
@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ClaudeThinkingTransformerPlugin } from '../claude-thinking-transformer.plugin.js';
+import { ClaudeRequestNormalizerPlugin } from '../claude-request-normalizer.plugin.js';
 import { PluginContext, ProxyInterceptor } from '../types.js';
 import { ProxyContext } from '../../proxy-types.js';
 import { logger } from '../../../../../../utils/logger.js';
@@ -47,30 +47,30 @@ function createProxyContext(body: Record<string, unknown> | null, contentType = 
   };
 }
 
-describe('ClaudeThinkingTransformerPlugin', () => {
-  let plugin: ClaudeThinkingTransformerPlugin;
+describe('ClaudeRequestNormalizerPlugin', () => {
+  let plugin: ClaudeRequestNormalizerPlugin;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    plugin = new ClaudeThinkingTransformerPlugin();
+    plugin = new ClaudeRequestNormalizerPlugin();
   });
 
   // ---------------------------------------------------------------------------
   describe('Plugin Metadata', () => {
     it('has correct id', () => {
-      expect(plugin.id).toBe('@codemie/proxy-claude-thinking-transformer');
+      expect(plugin.id).toBe('@codemie/proxy-claude-request-normalizer');
     });
 
     it('has correct name', () => {
-      expect(plugin.name).toBe('Claude Thinking Transformer');
+      expect(plugin.name).toBe('Claude Request Normalizer');
     });
 
     it('has correct version', () => {
       expect(plugin.version).toBe('1.0.0');
     });
 
-    it('has priority 16 (after RequestSanitizer at 15)', () => {
-      expect(plugin.priority).toBe(16);
+    it('has priority 14 (before RequestSanitizer at 15)', () => {
+      expect(plugin.priority).toBe(14);
     });
   });
 
@@ -79,7 +79,7 @@ describe('ClaudeThinkingTransformerPlugin', () => {
     it('creates interceptor for codemie-claude', async () => {
       const interceptor = await plugin.createInterceptor(createPluginContext('codemie-claude'));
       expect(interceptor).toBeDefined();
-      expect(interceptor.name).toBe('claude-thinking-transformer');
+      expect(interceptor.name).toBe('claude-request-normalizer');
     });
 
     it('throws for codemie-code agent', async () => {
@@ -100,6 +100,88 @@ describe('ClaudeThinkingTransformerPlugin', () => {
     it('throws for empty string clientType', async () => {
       await expect(plugin.createInterceptor(createPluginContext('')))
         .rejects.toThrow('Plugin disabled');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('Haiku thinking stripping (Chain 1)', () => {
+    let interceptor: ProxyInterceptor;
+
+    beforeEach(async () => {
+      interceptor = await plugin.createInterceptor(createPluginContext('codemie-claude'));
+    });
+
+    it('strips thinking for claude-haiku-4-5', async () => {
+      const context = createProxyContext({
+        model: 'claude-haiku-4-5',
+        messages: [{ role: 'user', content: 'hello' }],
+        thinking: { type: 'enabled', budget_tokens: 5000 },
+      });
+
+      await interceptor.onRequest!(context);
+
+      const body = JSON.parse(context.requestBody!.toString('utf-8'));
+      expect(body.thinking).toBeUndefined();
+      expect(body.model).toBe('claude-haiku-4-5');
+    });
+
+    it('strips thinking for claude-haiku-4-5-20251001 (dated variant)', async () => {
+      const context = createProxyContext({
+        model: 'claude-haiku-4-5-20251001',
+        thinking: { type: 'enabled', budget_tokens: 5000 },
+      });
+
+      await interceptor.onRequest!(context);
+
+      const body = JSON.parse(context.requestBody!.toString('utf-8'));
+      expect(body.thinking).toBeUndefined();
+    });
+
+    it('does NOT strip thinking for claude-haiku-4-6 (newer version)', async () => {
+      const context = createProxyContext({
+        model: 'claude-haiku-4-6',
+        thinking: { type: 'enabled', budget_tokens: 5000 },
+      });
+
+      await interceptor.onRequest!(context);
+
+      const body = JSON.parse(context.requestBody!.toString('utf-8'));
+      expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 5000 });
+    });
+
+    it('does NOT strip for claude-haiku-4-7 (future version, may support thinking)', async () => {
+      const context = createProxyContext({
+        model: 'claude-haiku-4-7',
+        thinking: { type: 'enabled', budget_tokens: 5000 },
+      });
+
+      await interceptor.onRequest!(context);
+
+      const body = JSON.parse(context.requestBody!.toString('utf-8'));
+      expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 5000 });
+    });
+
+    it('does NOT strip for claude-sonnet-4-6', async () => {
+      const context = createProxyContext({
+        model: 'claude-sonnet-4-6',
+        thinking: { type: 'enabled', budget_tokens: 5000 },
+      });
+
+      await interceptor.onRequest!(context);
+
+      const body = JSON.parse(context.requestBody!.toString('utf-8'));
+      expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 5000 });
+    });
+
+    it('updates content-length after stripping', async () => {
+      const context = createProxyContext({
+        model: 'claude-haiku-4-5',
+        thinking: { type: 'enabled', budget_tokens: 5000 },
+      });
+
+      await interceptor.onRequest!(context);
+
+      expect(context.headers['content-length']).toBe(String(context.requestBody!.length));
     });
   });
 
